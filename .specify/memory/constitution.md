@@ -1,50 +1,77 @@
-# [PROJECT_NAME] Constitution
-<!-- Example: Spec Constitution, TaskFlow Constitution, etc. -->
+<!-- Sync Impact Report: Constitution v1.0.0 Created
+- Initial version establishment for ContosoDashboard project
+- Ratified: 2026-08-16
+- Core principles: Spec-Driven Development, Security-First, Role-Based Design, Service Layer Architecture, Code Quality
+-->
+
+# ContosoDashboard Constitution
 
 ## Core Principles
 
-### [PRINCIPLE_1_NAME]
-<!-- Example: I. Library-First -->
-[PRINCIPLE_1_DESCRIPTION]
-<!-- Example: Every feature starts as a standalone library; Libraries must be self-contained, independently testable, documented; Clear purpose required - no organizational-only libraries -->
+### I. Spec-Driven Development (SDD)
+All features MUST be specified using the Spec Kit workflow before implementation begins. Specifications MUST include: user stories, acceptance criteria, design artifacts, and task breakdown. Code implementation follows approved specifications; deviations MUST be documented and re-approved. Features without specifications MUST NOT be implemented.
 
-### [PRINCIPLE_2_NAME]
-<!-- Example: II. CLI Interface -->
-[PRINCIPLE_2_DESCRIPTION]
-<!-- Example: Every library exposes functionality via CLI; Text in/out protocol: stdin/args → stdout, errors → stderr; Support JSON + human-readable formats -->
+**Rationale**: Ensures stakeholder alignment, prevents scope creep, and maintains consistent quality across the multi-feature dashboard application.
 
-### [PRINCIPLE_3_NAME]
-<!-- Example: III. Test-First (NON-NEGOTIABLE) -->
-[PRINCIPLE_3_DESCRIPTION]
-<!-- Example: TDD mandatory: Tests written → User approved → Tests fail → Then implement; Red-Green-Refactor cycle strictly enforced -->
+### II. Security-First by Design
+Every feature MUST implement security at all layers: authentication, authorization, data validation, and service-level checks. Role-based access control (RBAC) MUST be enforced via `[Authorize]` attributes and service layer validation. User data isolation MUST be verified for each feature (IDOR protection mandatory). Security headers and defensive practices MUST be included in all implementations.
 
-### [PRINCIPLE_4_NAME]
-<!-- Example: IV. Integration Testing -->
-[PRINCIPLE_4_DESCRIPTION]
-<!-- Example: Focus areas requiring integration tests: New library contract tests, Contract changes, Inter-service communication, Shared schemas -->
+**Rationale**: This training application demonstrates security best practices; learners rely on this model for production understanding.
 
-### [PRINCIPLE_5_NAME]
-<!-- Example: V. Observability, VI. Versioning & Breaking Changes, VII. Simplicity -->
-[PRINCIPLE_5_DESCRIPTION]
-<!-- Example: Text I/O ensures debuggability; Structured logging required; Or: MAJOR.MINOR.BUILD format; Or: Start simple, YAGNI principles -->
+### III. Role-Based Access & User Isolation
+All protected pages and services MUST enforce role-based authorization through claims-based identity. Features MUST verify user's role and project/team membership before granting data access. Cross-user data access MUST be prevented at both page and service layers (defense in depth). Authorization logic MUST be centralized in service layer to prevent duplication.
 
-## [SECTION_2_NAME]
-<!-- Example: Additional Constraints, Security Requirements, Performance Standards, etc. -->
+**Rationale**: Contoso's dashboard serves multiple roles (Admin, Project Manager, Team Lead, Employee); user isolation is non-negotiable for data integrity and trust.
 
-[SECTION_2_CONTENT]
-<!-- Example: Technology stack requirements, compliance standards, deployment policies, etc. -->
+### IV. Service Layer Architecture
+Business logic MUST reside exclusively in service classes (located in `/Services/`). Pages and components MUST NOT contain business logic. Services MUST be dependency-injected and unit-testable. Data access MUST occur only through services, with role and user context validated before returning results.
 
-## [SECTION_3_NAME]
-<!-- Example: Development Workflow, Review Process, Quality Gates, etc. -->
+**Rationale**: Maintains clean separation of concerns, improves testability, and ensures consistent security enforcement across all UI touchpoints.
 
-[SECTION_3_CONTENT]
-<!-- Example: Code review requirements, testing gates, deployment approval process, etc. -->
+### V. Code Quality & Documentation
+All new code MUST include inline comments for complex logic. Public methods and classes MUST include XML documentation. Naming conventions MUST be clear and consistent (PascalCase for classes/methods, camelCase for variables). Unused code and commented-out code MUST NOT be committed. Code reviews MUST verify compliance before merging.
+
+**Rationale**: Training code serves as a learning model; clarity and documentation are essential for knowledge transfer.
+
+## Technical Requirements
+
+**Technology Stack**:
+- Framework: .NET 8 / Blazor Server (fixed)
+- Database: Entity Framework Core with SQLite (training) or SQL Server (configurable)
+- Authentication: Claims-based with cookie middleware (mock in training, replaceable in production)
+- UI Framework: Razor components with CSS Grid/Flexbox
+
+**File Organization**:
+- Data models: `/Models/`
+- Database context: `/Data/`
+- Business logic services: `/Services/`
+- UI components & pages: `/Pages/` and `/Shared/`
+- Static assets: `/wwwroot/`
+
+## Development Workflow
+
+**Feature Implementation Cycle**:
+1. Create feature specification (Spec Kit workflow) with stakeholder approval
+2. Design data models and database schema per specification
+3. Implement service layer with role-based authorization
+4. Create Razor components/pages that consume services
+5. Test across all user roles to verify access control
+6. Code review with security and architecture focus
+7. Merge and document in project wiki
+
+**Code Review Gates**:
+- All PRs MUST be reviewed before merging
+- Reviews MUST verify: specification compliance, security implementation, code quality, test coverage (if applicable)
+- Breaking changes MUST be documented and versioned
 
 ## Governance
-<!-- Example: Constitution supersedes all other practices; Amendments require documentation, approval, migration plan -->
 
-[GOVERNANCE_RULES]
-<!-- Example: All PRs/reviews must verify compliance; Complexity must be justified; Use [GUIDANCE_FILE] for runtime development guidance -->
+This Constitution supersedes all conflicting practices and represents the agreed-upon engineering standards for ContosoDashboard. Amendments MUST be documented with rationale, reviewed by the team, and approved before enforcement.
 
-**Version**: [CONSTITUTION_VERSION] | **Ratified**: [RATIFICATION_DATE] | **Last Amended**: [LAST_AMENDED_DATE]
-<!-- Example: Version: 2.1.1 | Ratified: 2025-06-13 | Last Amended: 2025-07-16 -->
+All PRs and code reviews MUST verify compliance with these principles. Complexity introduced by security or access control requirements MUST be justified and documented. Deviations from the Constitution require written approval and amendment tracking.
+
+**Amendment Process**: Proposed changes to this Constitution MUST include: current principle/rule, proposed change, rationale, impact assessment, and migration plan (if applicable).
+
+---
+
+**Version**: 1.0.0 | **Ratified**: 2026-08-16 | **Last Amended**: 2026-08-16
