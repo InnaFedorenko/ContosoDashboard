@@ -106,6 +106,183 @@ This guide documents runnable scenarios that validate the document management fe
 
 ---
 
+## Scenario 3b: Virus Scanning Background Job (Security - FR-007)
+
+**Goal**: Verify FR-007 - Uploaded files scanned for viruses before storage access. Async scanning via background job.
+
+**Test User**: Employee (`ni.kang@contoso.com`)
+
+**Prerequisites**:
+- [ ] Mock virus scanner configured in `appsettings.Development.json`
+- [ ] UploadQueue table initialized
+- [ ] Background job processor running (or manual trigger available for testing)
+
+**Test Flow - Part 1: Upload Triggers Scan Queue**
+
+**Steps**:
+
+1. Login as Employee
+2. Navigate to Documents → Upload Document
+3. Select file: `sample-document.pdf` (5 MB)
+4. Enter metadata:
+   - Title: "Q3 Budget Report"
+   - Category: "Reports"
+5. Click "Upload"
+6. Observe success message displayed immediately (upload completes)
+7. Verify file status shows "Scanning..." in My Documents
+8. Check database UploadQueue table: Verify entry created with:
+   - [ ] DocumentId: (auto-assigned)
+   - [ ] QueueStatus: "Pending"
+   - [ ] RetryCount: 0
+
+**Expected Results - Part 1**:
+- [ ] Upload completes within 30 seconds (FR-005)
+- [ ] Document created with Status = "PENDING_SCAN" (not ACTIVE yet)
+- [ ] Success message: "Document uploaded, virus scanning in progress..."
+- [ ] Scan queue entry created in UploadQueue table
+- [ ] Document visible only to uploader during scan (not in shared lists)
+- [ ] Upload confirmation returned to user immediately (async scan)
+
+**Acceptance Criteria - Part 1**: ✅ PASS if upload queues file for scanning
+
+---
+
+**Test Flow - Part 2: Mock Scanner Processes Queue**
+
+**Steps** (if using sync mock scanner):
+
+1. Wait 2-3 seconds (mock scan simulates 2s delay)
+2. Refresh browser or check document status in My Documents
+3. Verify document status changed from "Scanning..." to "Active"
+4. Observe document now fully accessible (downloadable, previewable, searchable)
+5. Check DocumentActivity table: Verify "VirusScan" event logged
+
+**Expected Results - Part 2**:
+- [ ] Mock scanner completes within 3 seconds (2s simulated scan + overhead)
+- [ ] Document Status updated to "ACTIVE"
+- [ ] Document visible in browse/search results
+- [ ] DocumentActivity record created with ActivityType="VirusScan", Status="Clean"
+- [ ] UploadQueue.QueueStatus updated to "Scanned_Clean"
+
+**Acceptance Criteria - Part 2**: ✅ PASS if scan completes and document becomes accessible
+
+---
+
+**Test Flow - Part 3: Threat Detected Scenario**
+
+**Steps** (if test framework supports threat injection):
+
+1. Configure test to inject threat detection in mock scanner
+2. Upload file: `eicar-test-file.txt` (EICAR test standard malware signature)
+3. Observe system response
+4. Check document Status in database: Should be "QUARANTINED"
+5. Attempt to download document as uploader: Should be blocked with "File quarantined" message
+6. Verify admin notification sent (check Notification records in database or notification service logs)
+
+**Expected Results - Part 3**:
+- [ ] Document Status changed to "QUARANTINED"
+- [ ] Document removed from uploader's browse/download (blocked)
+- [ ] Admin receives alert notification (FR-007 security requirement)
+- [ ] UploadQueue.QueueStatus = "Scan_Failed"
+- [ ] DocumentActivity logged with status "Threat_Detected"
+- [ ] Error message clear: "File contains malware and was quarantined. Contact admin."
+
+**Acceptance Criteria - Part 3**: ✅ PASS if threat detection blocks access and alerts admin
+
+---
+
+**Test Flow - Part 4: Offline Queue Processing**
+
+**Steps** (simulate offline environment):
+
+1. Disable network (DevTools → Offline mode or disable WiFi)
+2. Upload file: `sample-report.docx` with metadata
+3. Observe: "Document uploaded, queued for scan when connection restored"
+4. Verify document appears locally with Status = "PENDING_SCAN"
+5. Re-enable network
+6. Observe: Background sync job picks up queue entry
+7. Wait 2-3 seconds for scan to complete
+8. Verify document Status updated to "ACTIVE"
+
+**Expected Results - Part 4**:
+- [ ] Offline upload succeeds without network (FR-005a)
+- [ ] Queue entry persists in UploadQueue table during offline (FR-005b)
+- [ ] On reconnection, sync service processes queue (FR-005c)
+- [ ] Scan completes on restoration of connectivity (FR-005d)
+- [ ] User notified when scan completes (push notification or page refresh)
+
+**Acceptance Criteria - Part 4**: ✅ PASS if offline queue processes on reconnection
+
+---
+
+**Test Flow - Part 5: Scan Timeout & Retry**
+
+**Steps** (if framework supports timeout injection):
+
+1. Configure mock scanner to simulate timeout (>120 seconds)
+2. Upload file: `large-file.iso`
+3. Wait for timeout
+4. Verify UploadQueue entry: RetryCount incremented
+5. Check error message: "Scan timeout, will retry"
+6. Trigger manual retry via admin UI (or wait for automatic retry)
+7. Verify scan completes on retry
+
+**Expected Results - Part 5**:
+- [ ] Timeout triggers after 120 seconds (or configured threshold)
+- [ ] UploadQueue.QueueStatus = "Error"
+- [ ] UploadQueue.RetryCount incremented
+- [ ] ErrorMessage populated (e.g., "Timeout after 120s")
+- [ ] Manual retry available via admin UI
+- [ ] Automatic retry scheduled (configurable backoff)
+- [ ] On successful retry, document becomes ACTIVE
+
+**Acceptance Criteria - Part 5**: ✅ PASS if scan retries handle timeouts
+
+---
+
+**Architecture Validation - Database State**
+
+Verify UploadQueue and Document tables after scenarios:
+
+```sql
+-- UploadQueue should contain entries for all uploads
+SELECT DocumentId, QueueStatus, RetryCount, ErrorMessage FROM UploadQueue
+ORDER BY QueuedDate DESC;
+
+-- Document status progression: PENDING_SCAN → ACTIVE (or QUARANTINED)
+SELECT DocumentId, Title, Status, UploadDate FROM Document
+ORDER BY UploadDate DESC;
+
+-- DocumentActivity logs all scan events
+SELECT DocumentId, ActivityType, Details, ActivityDate FROM DocumentActivity
+WHERE ActivityType = 'VirusScan'
+ORDER BY ActivityDate DESC;
+```
+
+**Expected Rows**:
+- 5+ entries in UploadQueue (all uploads from test scenarios)
+- Most documents have Status = "ACTIVE"
+- Threat test document has Status = "QUARANTINED"
+- DocumentActivity contains VirusScan entries for each document
+
+**Configuration Validation**
+
+Verify appsettings.Development.json contains:
+
+```json
+{
+  "VirusScanning": {
+    "Enabled": true,
+    "ScannerType": "Mock",
+    "MaxConcurrentScans": 5,
+    "ScanTimeoutSeconds": 120,
+    "MockScanDelayMs": 2000
+  }
+}
+```
+
+---
+
 ## Scenario 4: Browse My Documents with Filtering (P1)
 
 **Goal**: Verify FR-011, FR-012 - User can browse, sort, filter personal documents

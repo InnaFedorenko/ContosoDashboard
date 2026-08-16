@@ -25,6 +25,146 @@ Add centralized document upload and management capabilities to ContosoDashboard,
 - Storage quotas: Out of scope for MVP (unlimited storage) (cleared: Q2)
 - File storage: Local filesystem with IFileStorageService abstraction for future cloud migration
 - Architecture: Service layer pattern with dependency injection, role-based authorization at service level
+- Virus scanning: Azure Functions with Queue Storage triggers for async background processing (see Virus Scanning Architecture below)
+
+### Virus Scanning Architecture (Background Job Processing)
+
+**Requirement**: FR-007 mandates virus scanning of all uploaded files before storage access.
+
+**Implementation Approach**: Asynchronous background job processing with Azure Functions triggered by queue events. This prevents upload blocking on scan latency and supports offline-first workflows.
+
+**System Design**:
+
+```
+1. Upload Flow:
+   Upload → Validate metadata → Store file → Create DocumentQueue entry → Queue scan message
+         ↓ (async) ↓
+   Return upload confirmation to user (file in PENDING_SCAN status)
+   
+2. Scan Flow (Azure Function triggered by Queue):
+   Queue trigger → Extract document metadata → Invoke virus scanner → Update status
+   ├─ Success: Status = ACTIVE, DocumentQueue status = SCANNED_CLEAN
+   └─ Threat: Status = QUARANTINED, DocumentQueue status = SCAN_FAILED, Admin alert
+
+3. Access Control:
+   • Only ACTIVE documents returned in search/browse
+   • PENDING_SCAN documents visible only to uploader (FR-006: metadata visible during upload)
+   • QUARANTINED documents only visible to admin for manual review/deletion
+```
+
+**Azure Infrastructure**:
+
+| Component | Purpose | Configuration |
+|-----------|---------|----------------|
+| **Azure Storage Queue** | Async task queue for scan jobs | Queue name: `document-scan-queue` |
+| **Azure Function (Timer + Queue)** | Processes scan messages | Runtime: .NET 8 (isolated), Trigger: QueueTrigger |
+| **Azure ClamAV Integration** | Virus definition source | Via Azure Container Instances or ClamAV REST API |
+| **Document Queue Table** | MVP: SQL Server table tracking scan status | Entity: UploadQueue with QueueStatus column |
+
+**Local Development/Testing**:
+
+For training environments (no cloud), implement mock scanning:
+- `IVirusScanService` interface with `ScanFileAsync()` method
+- Mock implementation: Simulate scan delay (2s) + return CLEAN status
+- Real Azure Functions deployment: Use actual ClamAV integration when deploying to cloud
+- Configuration: `appsettings.Development.json` switches between mock and real scanners
+
+**Implementation Tasks**:
+
+| Task | Service Layer | Azure Component | Status |
+|------|---------------|-----------------|--------|
+| Define IVirusScanService interface | Services/IVirusScanService.cs | N/A (local only) | TBD |
+| Implement mock scanner | Services/MockVirusScanService.cs | N/A | TBD |
+| Update DocumentService to invoke scan | Services/DocumentService.cs | N/A | TBD |
+| Create UploadQueue processor | Services/UploadQueueService.cs | N/A | TBD |
+| Document status states (PENDING_SCAN, ACTIVE, QUARANTINED) | Models/Document.cs (Status enum) | N/A | TBD |
+| Azure Function: DocumentScanFunction | N/A (cloud deployment) | Azure Function with QueueTrigger | TBD |
+| Queue integration tests | Tests/VirusScanIntegrationTests.cs | Emulated Queue Storage | TBD |
+
+**Workflow Details**:
+
+**Step 1: Upload Triggers Scan Queue**
+```csharp
+// Services/DocumentService.cs (pseudo-code)
+public async Task<DocumentSummary> UploadAsync(DocumentUploadRequest request, User uploader)
+{
+    // 1. Validate file (size, type)
+    // 2. Generate secure file path
+    // 3. Store file to AppData/uploads/{userId}/{guid}.{ext}
+    // 4. Create Document entity with Status = PENDING_SCAN
+    // 5. Save to database
+    // 6. Queue scan message: {DocumentId, FilePath, FileName, FileSize}
+    // 7. Return DocumentSummary (file in PENDING_SCAN state, visible to uploader)
+}
+```
+
+**Step 2: Azure Function Processes Queue**
+```
+Trigger: QueueTrigger receives message from document-scan-queue
+Input: DocumentScanMessage { DocumentId, FilePath, FileName, FileSize }
+Process:
+  1. Load Document from database (check exists & PENDING_SCAN status)
+  2. Retrieve file from AppData/uploads/
+  3. Call virus scanner via IVirusScanService
+  4. Update Document.Status based on result:
+     ✓ CLEAN: Status = ACTIVE, UploadQueue.QueueStatus = SCANNED_CLEAN
+     ✗ THREAT: Status = QUARANTINED, UploadQueue.QueueStatus = SCAN_FAILED
+     ✗ ERROR: Status = PENDING_SCAN, UploadQueue.QueueStatus = SCAN_PENDING_RETRY
+  5. Log audit event (DocumentActivity record)
+  6. If threat detected: alert Admin via NotificationService
+Output: Document status updated; user sees ACTIVE doc when scan completes
+```
+
+**Step 3: User Experience**
+- **During upload**: "File uploaded, scanning in progress..." (PENDING_SCAN)
+- **After clean scan**: Document appears in MyDocuments, searchable, downloadable (ACTIVE)
+- **After threat detected**: Admin notified, user sees "File quarantined - admin review required" (QUARANTINED)
+
+**Offline Handling**:
+
+When offline before scan completes:
+1. Document stored locally with PENDING_SCAN status
+2. Scan queue message persisted in UploadQueue table
+3. On reconnection: Background sync service processes queue
+4. Document status updated when connection restored
+5. Notification pushed to user when scan completes
+
+**Configuration** (appsettings.json):
+
+```json
+{
+  "VirusScanning": {
+    "Enabled": true,
+    "ScannerType": "Mock",  // "Mock" for dev, "AzureFunctions" for cloud
+    "MaxConcurrentScans": 5,
+    "ScanTimeoutSeconds": 120,
+    "QuarantineNotificationEmail": "security@contoso.com",
+    "MockScanDelayMs": 2000
+  },
+  "AzureStorageQueue": {
+    "ConnectionString": "UseDevelopmentStorage=true",  // Emulator for dev
+    "QueueName": "document-scan-queue"
+  }
+}
+```
+
+**Testing Strategy**:
+
+| Scenario | Implementation | Validation |
+|----------|-----------------|-----------|
+| Clean file scan | Mock scanner returns CLEAN | Document status = ACTIVE after scan |
+| Threat detected | Mock scanner returns THREAT | Document status = QUARANTINED, admin notified |
+| Scan timeout | Mock scanner throws TimeoutException | UploadQueue retry count incremented |
+| Queue message lost | Rescan triggered manually via admin UI | Document re-queued for scanning |
+| Offline upload + scan | Queue message persists, sync processes on reconnect | Document becomes ACTIVE when sync completes |
+| Concurrent uploads | 5 concurrent scans processed | All documents scanned without blocking |
+
+**Migration Path to Production**:
+
+1. **MVP (Training)**: Mock scanner in Services/ layer, UploadQueue table
+2. **Phase 2 (Cloud)**: Deploy DocumentScanFunction to Azure Functions, connect to ClamAV REST API
+3. **Phase 3 (Scale)**: Upgrade to Azure Container Instances for custom scanner VM
+4. **Optional Enhancement**: Storage account lifecycle management (move quarantined files to archive)
 
 ## Constitution Check
 

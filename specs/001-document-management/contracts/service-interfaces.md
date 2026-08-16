@@ -407,7 +407,239 @@ namespace ContosoDashboard.Services
 
 ---
 
+## IVirusScanService Interface
+
+**Purpose**: Abstraction for virus scanning operations. Enables mock scanning in training environments and real scanning via Azure Functions in production.
+
+**Rationale**: 
+- Separates virus scan implementation from document upload logic
+- Supports both synchronous mock scanning (training) and async Azure Functions (production)
+- Allows flexible retry logic and offline queue processing
+
+```csharp
+namespace ContosoDashboard.Services
+{
+    /// <summary>
+    /// Virus scanning abstraction for uploaded files.
+    /// Training: Mock scanner (fast, no actual scanning)
+    /// Production: Azure Functions with ClamAV integration
+    /// </summary>
+    public interface IVirusScanService
+    {
+        /// <summary>
+        /// Scan file at given path for viruses/malware.
+        /// Supports both sync (mock) and async (Azure Function) implementations.
+        /// </summary>
+        /// <param name="documentId">Document record ID for tracking</param>
+        /// <param name="filePath">Full path to file in storage</param>
+        /// <param name="fileName">Original file name for logging</param>
+        /// <param name="fileSize">File size in bytes for logging</param>
+        /// <param name="cancellationToken">Cancellation token</param>
+        /// <returns>VirusScanResult with status and details</returns>
+        Task<VirusScanResult> ScanFileAsync(
+            int documentId, 
+            string filePath, 
+            string fileName, 
+            long fileSize, 
+            CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Queue document for async scanning (via Azure Function).
+        /// Used when offline or for batch processing.
+        /// </summary>
+        /// <param name="documentId">Document record ID</param>
+        /// <param name="filePath">Full path to file</param>
+        /// <param name="fileName">Original file name</param>
+        /// <param name="fileSize">File size</param>
+        /// <returns>Queue ID for tracking</returns>
+        Task<int> QueueScanAsync(int documentId, string filePath, string fileName, long fileSize);
+
+        /// <summary>
+        /// Check if file is safe for access (called before download/preview).
+        /// Returns false if PENDING_SCAN or QUARANTINED.
+        /// </summary>
+        Task<bool> IsFileSafeAsync(int documentId);
+    }
+}
+```
+
+### VirusScanResult Model
+
+```csharp
+namespace ContosoDashboard.Services
+{
+    /// <summary>
+    /// Result of virus scan operation.
+    /// </summary>
+    public class VirusScanResult
+    {
+        /// <summary>
+        /// Scan status: CLEAN, THREAT_DETECTED, ERROR, or PENDING_SCAN
+        /// </summary>
+        public VirusScanStatus Status { get; set; }
+
+        /// <summary>
+        /// Human-readable message (e.g., "File contains Win.Trojan.X" or "Scan timeout after 120s")
+        /// </summary>
+        public string Message { get; set; }
+
+        /// <summary>
+        /// Threat name if detected (e.g., "Eicar-Test-File")
+        /// </summary>
+        public string? ThreatName { get; set; }
+
+        /// <summary>
+        /// Timestamp of scan
+        /// </summary>
+        public DateTime ScannedAt { get; set; }
+
+        /// <summary>
+        /// Azure Function execution ID (if using cloud scanner)
+        /// </summary>
+        public string? ExecutionId { get; set; }
+    }
+
+    /// <summary>
+    /// Virus scan status enumeration
+    /// </summary>
+    public enum VirusScanStatus
+    {
+        /// <summary>File passed scan - safe for access</summary>
+        Clean,
+
+        /// <summary>Threat/malware detected - file quarantined</summary>
+        ThreatDetected,
+
+        /// <summary>Scan operation failed or timed out - retry later</summary>
+        Error,
+
+        /// <summary>Scan not yet completed - file access blocked</summary>
+        PendingScan
+    }
+}
+```
+
+### MockVirusScanService Implementation
+
+For training/offline environments, this mock implementation simulates scanning:
+
+```csharp
+namespace ContosoDashboard.Services
+{
+    /// <summary>
+    /// Mock virus scanner for training environments.
+    /// Simulates 2-second scan delay, always returns CLEAN status.
+    /// Uses queue for consistency with async scanning flow.
+    /// </summary>
+    public class MockVirusScanService : IVirusScanService
+    {
+        private readonly IUploadQueueService _queueService;
+        private readonly ILogger<MockVirusScanService> _logger;
+        private readonly ApplicationDbContext _context;
+
+        public MockVirusScanService(
+            IUploadQueueService queueService, 
+            ILogger<MockVirusScanService> logger, 
+            ApplicationDbContext context)
+        {
+            _queueService = queueService;
+            _logger = logger;
+            _context = context;
+        }
+
+        public async Task<VirusScanResult> ScanFileAsync(
+            int documentId, 
+            string filePath, 
+            string fileName, 
+            long fileSize, 
+            CancellationToken cancellationToken = default)
+        {
+            _logger.LogInformation($"Mock scanning file {fileName} ({fileSize} bytes)");
+
+            // Simulate scan delay (2 seconds)
+            await Task.Delay(2000, cancellationToken);
+
+            // Always return clean in mock (training data is safe)
+            var result = new VirusScanResult
+            {
+                Status = VirusScanStatus.Clean,
+                Message = "Mock scan passed",
+                ThreatName = null,
+                ScannedAt = DateTime.UtcNow,
+                ExecutionId = Guid.NewGuid().ToString()
+            };
+
+            // Update document status to ACTIVE
+            var document = await _context.Documents.FindAsync(documentId);
+            if (document != null)
+            {
+                document.Status = "ACTIVE";
+                await _context.SaveChangesAsync(cancellationToken);
+            }
+
+            return result;
+        }
+
+        public async Task<int> QueueScanAsync(
+            int documentId, 
+            string filePath, 
+            string fileName, 
+            long fileSize)
+        {
+            // Mock: Return queue ID immediately
+            _logger.LogInformation($"Queued mock scan for document {documentId}");
+            return documentId; // Use document ID as queue ID for simplicity
+        }
+
+        public async Task<bool> IsFileSafeAsync(int documentId)
+        {
+            var document = await _context.Documents.FindAsync(documentId);
+            return document?.Status == "ACTIVE";
+        }
+    }
+}
+```
+
+### Azure Functions Implementation (Production)
+
+For cloud deployment, implement Azure Function with ClamAV:
+
+```
+DocumentScanFunction.cs (Azure Function project)
+├─ Trigger: QueueTrigger("document-scan-queue")
+├─ Input: DocumentScanMessage { DocumentId, FilePath, FileName, FileSize }
+├─ Process:
+│  1. Load document from database
+│  2. Download file from AppData/uploads/
+│  3. Call ClamAV via REST API (or container instance)
+│  4. Update Document.Status based on result
+│  5. Log audit event
+│  6. Alert admin if threat detected
+└─ Output: Document status changed, user notified
+
+Configuration (local.settings.json for emulator):
+{
+  "IsEncrypted": false,
+  "Values": {
+    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+    "FUNCTIONS_WORKER_RUNTIME": "dotnet-isolated",
+    "CLAMAV_ENDPOINT": "http://localhost:3310"
+  }
+}
+```
+
+**Workflow Summary**:
+
+1. **Upload**: DocumentService.UploadAsync() → Create Document with Status=PENDING_SCAN → Queue scan message
+2. **Local Dev**: Mock scanner processes queue immediately (2s delay)
+3. **Cloud**: Azure Function picks up queue message → Calls ClamAV → Updates Document.Status
+4. **Result**: Document transitions to ACTIVE (clean) or QUARANTINED (threat) after scan completes
+5. **Offline**: Scan queue message persists in UploadQueue table until connectivity restored
+
+---
+
 ## Data Transfer Objects (DTOs)
+
 
 ### DocumentUploadRequest
 ```csharp
