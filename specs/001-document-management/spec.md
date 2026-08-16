@@ -136,12 +136,19 @@ A document owner needs to share documents with specific team members who should 
 
 ### Edge Cases
 
-- What happens when user uploads a document while offline? → System should queue upload and sync when connection restored, OR display "Cannot upload - no connection" error
+- What happens when user uploads a document while offline? → System MUST queue upload locally and sync when connection is restored. User sees "Queued for upload" status. [CLARIFIED: Q1 → A: Queue-based sync approach]
 - What happens when a document file is deleted from disk but database record remains? → System should display "Document is unavailable" and allow admin to clean up orphaned records
-- What happens when user exceeds storage quota (if implemented)? → System should display "Storage limit reached" and prevent further uploads until space is freed
+- What happens when user exceeds storage quota (if implemented)? → Out of scope for MVP. Storage quota system deferred to future release. [CLARIFIED: Q2 → A: No quotas in MVP]
 - What happens when multiple users attempt to download same file simultaneously? → System should handle concurrent downloads without corruption or performance degradation
 - What happens when virus scan detects malware in uploaded file? → System should reject upload, delete file, log incident, and display "File rejected - security scan detected threat"
 - What happens when document metadata contains special characters (quotes, emojis, etc.)? → System should properly escape and store metadata without data loss or SQL injection vulnerabilities
+
+## Clarifications
+
+### Session 2026-08-16
+
+- Q: For offline document uploads, should the system automatically queue uploads and sync them when the connection is restored, or should it display an error immediately preventing offline uploads? → A: Queue-based sync - System queues uploads locally, syncs when connection restored. User sees "Queued for upload" status and automatic retry.
+- Q: Should the document management feature enforce storage quotas (e.g., "Storage limit reached" error), or is quota management out of scope for the MVP? → A: No quotas in MVP - unlimited storage for v1. Quota system deferred to future release.
 
 ## Requirements *(mandatory)*
 
@@ -152,6 +159,10 @@ A document owner needs to share documents with specific team members who should 
 - **FR-003**: System MUST enforce maximum file size of 25 MB per file and reject larger files with clear error message
 - **FR-004**: System MUST require users to provide document title (required) and category selection from predefined list when uploading
 - **FR-005**: System MUST allow optional metadata entry: description, associated project, and custom tags during upload
+- **FR-005a**: System MUST support offline document uploads by queueing them locally when no internet connection is available
+- **FR-005b**: System MUST display "Queued for upload" status for documents awaiting sync
+- **FR-005c**: System MUST automatically attempt to sync queued uploads when connection is restored
+- **FR-005d**: System MUST allow users to manually retry failed uploads and view upload queue status
 - **FR-006**: System MUST automatically capture and store: upload date/time, uploader name, file size, and MIME type
 - **FR-007**: System MUST scan uploaded files for viruses and malware before storage
 - **FR-008**: System MUST store uploaded files securely outside wwwroot directory with restricted access controls
@@ -222,3 +233,66 @@ A document owner needs to share documents with specific team members who should 
 - DatabaseId uses integers (not GUIDs) for consistency with existing schema
 - Category stores text values (not enums) for simplicity and flexibility
 - Development timeline: Must be production-ready within 8-10 weeks
+
+## Implementation Notes
+
+**Offline Upload Architecture** (from Clarification Q1):
+- System MUST implement upload queue mechanism to store pending uploads locally
+- UploadQueue table tracks: QueueId, DocumentMetadata (serialized), FileData (temp storage path), QueueStatus (Pending/Failed), QueuedDate, RetryCount
+- Service layer MUST detect offline condition and queue uploads instead of failing immediately
+- Background sync service MUST attempt to sync queued uploads when connection is restored
+- UI MUST display queue status and allow manual retry of failed uploads
+
+**No Storage Quotas in MVP** (from Clarification Q2):
+- Storage quota enforcement is explicitly OUT OF SCOPE for this release
+- System MUST NOT track per-user or per-project storage limits
+- Unlimited document uploads are allowed (subject only to 25 MB per-file limit)
+- Quota system deferred to future release (v2.0 or later)
+- No quota-related database columns or business logic needed for MVP
+
+---
+
+## Clarification Completion Report
+
+**Clarification Session**: 2026-08-16  
+**Questions Asked**: 2 (of 5 quota)  
+**Status**: ✅ COMPLETE - All ambiguities resolved
+
+### Questions Answered
+
+| # | Question | Answer | Impact |
+|---|----------|--------|--------|
+| Q1 | Offline upload handling (queue vs. error)? | Queue-based sync with retry capability | Adds UploadQueue table and background sync service to architecture |
+| Q2 | Storage quota enforcement in MVP? | No quotas - unlimited storage in v1 | Removes quota tracking from data model and service layer |
+
+### Sections Updated
+
+- **Edge Cases**: 2 edge cases clarified and resolved
+- **Functional Requirements**: Added FR-005a through FR-005d for offline upload queueing
+- **Implementation Notes**: New section documenting offline architecture and quota scope decisions
+- **Clarifications**: Session notes recorded for traceability
+
+### Coverage Summary
+
+| Category | Status | Notes |
+|----------|--------|-------|
+| Functional Scope | ✅ Clear | All 7 user stories prioritized and testable |
+| Data Model | ✅ Resolved | 3 entities fully specified; UploadQueue added for offline support |
+| User Interactions | ✅ Clear | 35+ acceptance scenarios with clear Given-When-Then format |
+| Performance | ✅ Clear | All response time targets specified (2-30 seconds) |
+| Security | ✅ Clear | RBAC, IDOR protection, role-based access detailed |
+| Edge Cases | ✅ Resolved | All 6 edge cases clarified; offline/quota decisions documented |
+| Constraints | ✅ Clear | Technical constraints and assumptions documented |
+| Offline Behavior | ✅ Resolved | Queue-based sync approach with retry logic specified |
+| Storage Management | ✅ Resolved | Unlimited storage confirmed for MVP; quotas deferred to v2 |
+
+### Ready for Next Phase
+
+✅ **Specification is now READY for `/speckit.plan`**
+
+All material ambiguities have been identified and resolved. The specification now provides sufficient clarity for:
+- Architecture and design artifact creation
+- Dependency-ordered task breakdown
+- Implementation without rework risk
+
+**No outstanding clarifications remain.** Proceed to planning phase.
